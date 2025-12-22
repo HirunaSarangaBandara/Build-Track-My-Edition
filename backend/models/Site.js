@@ -40,6 +40,14 @@ const siteSchema = new mongoose.Schema({
     siteImage: {
         type: String, // Path saved by Multer
         default: null,
+        // ONLY CHANGE HERE: Added setter to normalize paths for URL compatibility
+        set: function(v) {
+            if (!v) return null;
+            // Convert Windows backslashes to forward slashes
+            let normalized = v.replace(/\\/g, '/');
+            // Ensure path starts with a leading slash for easy concatenation
+            return normalized.startsWith('/') ? normalized : '/' + normalized;
+        }
     },
     startDate: {
         type: Date,

@@ -20,6 +20,7 @@ const DEFAULT_TASKS = [
 // --- Multer Storage Configuration ---
 const storage = multer.diskStorage({
     destination: (req, file, cb) => {
+        // Physical path on the server
         const uploadPath = path.join(__dirname, '..', 'uploads', 'site_images');
         if (!fs.existsSync(uploadPath)) {
             fs.mkdirSync(uploadPath, { recursive: true });
@@ -84,32 +85,20 @@ const authAdminOrManager = async (req, res, next) => {
 router.get('/', async (req, res) => {
     try {
         const sites = await Site.find().sort({ startDate: -1 });
-        
-        // 1. Get all labors that are currently assigned to ANY site (Worker or Manager)
-        // Checks if the 'sites' array exists and is not empty.
         const labors = await Labor.find({ sites: { $exists: true, $ne: [] } }).select('name sites role category _id'); 
         
-        // 2. Map labors to their siteName for efficient lookup
         const siteTeamMap = {};
         labors.forEach(labor => {
-            // Iterate through the new 'sites' array
             labor.sites.forEach(siteName => { 
                 if (!siteTeamMap[siteName]) siteTeamMap[siteName] = [];
-                // Attach the labor object (excluding sensitive data like password)
                 siteTeamMap[siteName].push(labor.toObject()); 
             });
         });
         
-        // 3. Attach worker teams to each site document
         const sitesWithTeams = sites.map(site => {
             const siteObject = site.toObject(); 
-            
-            // Get all workers and managers assigned to this site
             const fullTeam = siteTeamMap[siteObject.siteName] || [];
-            
-            // Filter the team to only include Workers for the primary 'team' display on the card
             siteObject.team = fullTeam.filter(member => member.role === 'Worker');
-            
             return siteObject;
         });
 
@@ -119,11 +108,10 @@ router.get('/', async (req, res) => {
     }
 });
 
-// POST Add New Site (ADMIN ONLY, with optional file upload)
+// POST Add New Site
 router.post('/', upload.single('siteImage'), authAdmin, async (req, res) => {
     
     if (req.fileValidationError) {
-        // Delete the file if it was uploaded before validation failed
         if (req.file) { fs.unlinkSync(req.file.path); } 
         return res.status(400).json({ message: req.fileValidationError });
     }
@@ -131,29 +119,28 @@ router.post('/', upload.single('siteImage'), authAdmin, async (req, res) => {
     const { siteName, managerId, managerName, otherDetails } = req.body;
     
     try {
-        const imagePath = req.file ? `/uploads/site_images/${req.file.filename}` : null; 
+        // FIX: Store the relative URL path, NOT the physical server path.
+        // Frontend uses: ${BACKEND_HOST}/uploads/site_images/filename.jpg
+        const imagePath = req.file ? `/site_images/${req.file.filename}` : null; 
         
         const newSite = new Site({ 
             siteName, 
             siteNameKey: siteName, 
-            managerId, 
-            managerName, 
+            managerId: managerId || null, 
+            managerName: managerName || null, 
             otherDetails,
-            siteImage: imagePath,
+            siteImage: imagePath, // Stored as "/site_images/filename.jpg"
             tasks: DEFAULT_TASKS,
             currentStatus: "Foundation Phase",
         });
         await newSite.save();
         
-        // Assign the site name to the manager's 'sites' array
         if (managerId) {
-            // Use $addToSet to prevent duplicate entries if the manager was somehow already assigned
             await Labor.findByIdAndUpdate(managerId, { $addToSet: { sites: siteName } }); 
         }
         
         res.status(201).json(newSite);
     } catch (err) {
-        // Clean up file on database error
         if (req.file) { 
             try { fs.unlinkSync(req.file.path); } catch (cleanupError) { console.error('Error deleting file:', cleanupError); }
         }
@@ -174,7 +161,6 @@ router.patch('/:id', authAdminOrManager, async (req, res) => {
         const site = await Site.findById(siteId);
         if (!site) return res.status(404).json({ message: "Site not found." });
 
-        // 1. Handle Task Completion Update
         if (taskId !== undefined) { 
             const task = site.tasks.id(taskId);
             if (!task) return res.status(404).json({ message: "Task not found." });
@@ -182,7 +168,6 @@ router.patch('/:id', authAdminOrManager, async (req, res) => {
             task.isCompleted = isCompleted;
             task.completedAt = isCompleted ? new Date() : null;
             
-            // Update currentStatus based on the next incomplete task
             const nextIncompleteTask = site.tasks.find(t => !t.isCompleted);
             if (nextIncompleteTask) {
                 site.currentStatus = `Working on: ${nextIncompleteTask.name}`;
@@ -191,16 +176,10 @@ router.patch('/:id', authAdminOrManager, async (req, res) => {
             }
         }
         
-        // 2. Handle Comment Addition
         if (comment) {
             site.updates.push({ userId, userName, comment });
         }
         
-        // 3. Handle Manager Re-assignment (Used by Admin in front-end modal)
-        // NOTE: The logic for updating the *old* and *new* manager's Labor.sites array 
-        // should ideally happen in dedicated routes to keep this PATCH simple, 
-        // as implemented in the front-end (handleManagerReassign). 
-        // We only update the Site document here.
         if (managerId !== undefined && req.user.role === 'admin') {
             site.managerId = managerId;
             site.managerName = managerName;
@@ -213,7 +192,7 @@ router.patch('/:id', authAdminOrManager, async (req, res) => {
     }
 });
 
-// Dedicated PATCH route for Site Status Change (Admin/Manager)
+// Dedicated PATCH route for Site Status Change
 router.patch('/status/:id', authAdminOrManager, async (req, res) => {
     const siteId = req.params.id;
     const { status } = req.body;
@@ -237,7 +216,7 @@ router.patch('/status/:id', authAdminOrManager, async (req, res) => {
 });
 
 
-// PATCH route for Manager Release (ADMIN ONLY) 
+// PATCH route for Manager Release
 router.patch('/manager-release/:id', authAdmin, async (req, res) => {
     const siteId = req.params.id;
     
@@ -248,12 +227,10 @@ router.patch('/manager-release/:id', authAdmin, async (req, res) => {
         const siteName = site.siteName;
         const managerId = site.managerId;
 
-        // 1. Unassign manager from the Site document
         site.managerId = null;
         site.managerName = null;
         await site.save();
 
-        // 2. Remove the site name from the manager's Labor.sites array
         if (managerId) {
             await Labor.findByIdAndUpdate(managerId, { $pull: { sites: siteName } });
         }
@@ -264,7 +241,7 @@ router.patch('/manager-release/:id', authAdmin, async (req, res) => {
     }
 });
 
-// DELETE Site (ADMIN ONLY) 
+// DELETE Site
 router.delete('/:id', authAdmin, async (req, res) => {
     try {
         const site = await Site.findById(req.params.id);
@@ -274,21 +251,20 @@ router.delete('/:id', authAdmin, async (req, res) => {
         
         const siteName = site.siteName;
 
-        // 1. Unassign ALL labors (Workers and Managers) from the deleted site
         await Labor.updateMany(
-            { sites: siteName }, // Find any labor whose 'sites' array contains the siteName
-            { $pull: { sites: siteName } } // Pull/Remove that siteName from the array
+            { sites: siteName }, 
+            { $pull: { sites: siteName } } 
         );
         
-        // 2. Delete the file from the server disk
+        // FIX: Logic to delete the physical image from the disk
         if (site.siteImage) {
-            const filePath = path.join(__dirname, '..', site.siteImage);
+            // Converts relative path back to server filesystem path
+            const filePath = path.join(__dirname, '..', 'uploads', site.siteImage);
             if (fs.existsSync(filePath)) {
                 fs.unlinkSync(filePath);
             }
         }
 
-        // 3. Delete the site document
         await Site.findByIdAndDelete(req.params.id);
 
         res.json({ message: "Site deleted successfully, and all users unassigned." });

@@ -397,7 +397,6 @@ function SitesTasks() {
         }
 
         return (
-            // FIX: Use only .confirmation-overlay, relying on CSS for fixed position and high Z-index
             <div className="confirmation-overlay"> 
                 <div className="confirmation-modal">
                     <h3>{title}</h3>
@@ -683,13 +682,18 @@ function SitesTasks() {
                     {sites.map(site => (
                         <div key={site._id} className={`site-card status-${site.status.toLowerCase().replace(/\s/g, '')}`}>
                             
-                            {/* FINAL FIX: Construct the full URL for the image */}
+                            {/* IMAGE LOGIC WITH ROBUST FALLBACK */}
                             <img 
                                 src={site.siteImage 
                                         ? `${BACKEND_HOST}${site.siteImage}` 
                                         : DEFAULT_IMAGE_URL} 
                                 alt={site.siteName} 
                                 className="site-image"
+                                // If the specific image path fails to load, swap to default
+                                onError={(e) => {
+                                    e.target.onerror = null; 
+                                    e.target.src = DEFAULT_IMAGE_URL;
+                                }}
                             />
                             
                             <div className="card-content">
@@ -715,7 +719,7 @@ function SitesTasks() {
                                     )}
                                 </div>
                                 
-                                {site.updates.length > 0 && (
+                                {site.updates && site.updates.length > 0 && (
                                     <div className="latest-update">
                                         <strong>Latest Update:</strong> 
                                         {site.updates[site.updates.length - 1].comment} 
