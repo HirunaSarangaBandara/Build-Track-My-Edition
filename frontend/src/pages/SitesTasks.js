@@ -23,14 +23,26 @@ function SitesTasks() {
 
   const [showUpdateModal, setShowUpdateModal] = useState(null);
   const [updateComment, setUpdateComment] = useState('');
+
   const [showWorkerModal, setShowWorkerModal] = useState(null);
+  const [workerModalMessage, setWorkerModalMessage] = useState({
+    type: '',
+    text: '',
+  });
+
+  const [showManagerModal, setShowManagerModal] = useState(null);
+  const [selectedManagerId, setSelectedManagerId] = useState('');
+  const [managerModalMessage, setManagerModalMessage] = useState({
+    type: '',
+    text: '',
+  });
+
   const [selectedCategory, setSelectedCategory] = useState('');
   const [availableWorkers, setAvailableWorkers] = useState([]);
 
   const [message, setMessage] = useState({ type: '', text: '' });
   const [confirmationData, setConfirmationData] = useState(null);
 
-  // Allocated inventory per site + usage inputs
   const [siteInventory, setSiteInventory] = useState({});
   const [usageInputs, setUsageInputs] = useState({});
 
@@ -67,8 +79,7 @@ function SitesTasks() {
       const { data } = await API.get('/labors');
       setManagers(data.filter(l => l.role === 'Manager' || l.role === 'admin'));
       setAllWorkers(data.filter(l => l.role === 'Worker'));
-    } catch (error) {
-      console.error('Error fetching managers/workers:', error);
+    } catch {
       showStatusMessage('error', 'Failed to fetch manager and worker data.');
     }
   };
@@ -81,14 +92,14 @@ function SitesTasks() {
           try {
             const { data } = await API.get(`/sites/inventory/${s._id}`);
             result[s._id] = data;
-          } catch (err) {
+          } catch {
             result[s._id] = [];
           }
         })
       );
       setSiteInventory(result);
     } catch {
-      // ignore top-level failure; per-site handled above
+      // ignore
     }
   };
 
@@ -96,9 +107,8 @@ function SitesTasks() {
     try {
       const { data } = await API.get('/sites');
       setSites(data);
-      loadAllSitesInventory(data); // ensure allocations show on cards
-    } catch (error) {
-      console.error('Error fetching sites:', error);
+      loadAllSitesInventory(data);
+    } catch {
       showStatusMessage('error', 'Failed to fetch site data.');
     }
   };
@@ -110,6 +120,9 @@ function SitesTasks() {
     currentUserRole === 'admin' || isCurrentUserManager(site.managerId);
 
   const isAuthorizedToAssignWorkers = (site) =>
+    currentUserRole === 'admin' || isCurrentUserManager(site.managerId);
+
+  const isAuthorizedToAssignManager = (site) =>
     currentUserRole === 'admin' || isCurrentUserManager(site.managerId);
 
   const calculateProgress = (tasks) => {
@@ -125,7 +138,9 @@ function SitesTasks() {
 
   const handleChange = (e) => {
     const { name, value } = e.target;
-    setFormData(prev => ({ ...prev, [name]: value }));
+    let newFormData = { ...formData, [name]: value };
+    if (name === "role") newFormData.category = "";
+    setFormData(newFormData);
   };
 
   const handleManagerSelect = (e) => {
@@ -186,6 +201,7 @@ function SitesTasks() {
     setShowWorkerModal(site);
     setSelectedCategory('');
     setAvailableWorkers([]);
+    setWorkerModalMessage({ type: '', text: '' });
   };
 
   const handleCategoryChange = (e) => {
@@ -209,28 +225,88 @@ function SitesTasks() {
       await API.patch(`/labors/assign-site/${worker._id}`, {
         siteName: site.siteName,
       });
-      showStatusMessage('success', `✅ ${worker.name} assigned to ${site.siteName}.`);
+      const text = `✅ ${worker.name} assigned to ${site.siteName}.`;
+      showStatusMessage('success', text);
+      setWorkerModalMessage({ type: 'success', text });
       fetchSites();
       fetchManagersAndWorkers();
     } catch (error) {
-      showStatusMessage(
-        'error',
-        `❌ Failed to assign worker: ${error.response?.data?.message || 'Check console.'}`
-      );
+      const msg = error.response?.data?.message || error.message;
+      const text = `❌ Failed to assign worker: ${msg}`;
+      showStatusMessage('error', text);
+      setWorkerModalMessage({ type: 'error', text });
     }
   };
 
   const releaseWorkerFromSite = async (workerId, siteName) => {
     try {
       await API.patch(`/labors/release-site/${workerId}`, { siteName });
-      showStatusMessage('success', `✅ Worker released from ${siteName}.`);
+      const text = `✅ Worker released from ${siteName}.`;
+      showStatusMessage('success', text);
+      setWorkerModalMessage({ type: 'success', text });
       fetchSites();
       fetchManagersAndWorkers();
     } catch (error) {
-      showStatusMessage(
-        'error',
-        `❌ Failed to release worker: ${error.response?.data?.message || 'Check console.'}`
-      );
+      const msg = error.response?.data?.message || error.message;
+      const text = `❌ Failed to release worker: ${msg}`;
+      showStatusMessage('error', text);
+      setWorkerModalMessage({ type: 'error', text });
+    }
+  };
+
+  // --- Manager assign/unassign modal logic ---
+  const openManagerModal = (site) => {
+    if (!isAuthorizedToAssignManager(site)) {
+      showStatusMessage('error', '❌ Not authorized to change manager for this site.');
+      return;
+    }
+    setShowManagerModal(site);
+    setSelectedManagerId(site.managerId || '');
+    setManagerModalMessage({ type: '', text: '' });
+  };
+
+  const closeManagerModal = () => {
+    setShowManagerModal(null);
+    setSelectedManagerId('');
+    setManagerModalMessage({ type: '', text: '' });
+  };
+
+  const handleAssignManager = async () => {
+    if (!showManagerModal) return;
+    if (!selectedManagerId) {
+      const text = 'Please select a manager.';
+      setManagerModalMessage({ type: 'error', text });
+      return;
+    }
+
+    const manager = managers.find(m => m._id === selectedManagerId);
+    if (!manager) {
+      const text = 'Selected manager not found.';
+      setManagerModalMessage({ type: 'error', text });
+      return;
+    }
+
+    try {
+      await API.patch(`/sites/${showManagerModal._id}`, {
+        managerId: manager._id,
+        managerName: manager.name,
+      });
+
+      await API.patch(`/labors/manager-site/${manager._id}`, {
+        siteName: showManagerModal.siteName,
+        action: 'assign',
+      });
+
+      const text = `✅ Manager assigned to ${showManagerModal.siteName}.`;
+      showStatusMessage('success', text);
+      setManagerModalMessage({ type: 'success', text });
+
+      await fetchSites();
+    } catch (error) {
+      const msg = error.response?.data?.message || error.message;
+      const text = `❌ Failed to assign manager: ${msg}`;
+      showStatusMessage('error', text);
+      setManagerModalMessage({ type: 'error', text });
     }
   };
 
@@ -242,6 +318,7 @@ function SitesTasks() {
     }
     setShowUpdateModal(site);
     setUpdateComment('');
+    fetchSiteInventory(site._id);
   };
 
   const closeUpdateModal = () => {
@@ -304,13 +381,13 @@ function SitesTasks() {
     }
   };
 
-  // --- Manager release + site delete confirmations ---
+  // --- confirmations ---
   const confirmAction = (data) => setConfirmationData(data);
   const closeConfirmation = () => setConfirmationData(null);
 
   const handleConfirmedAction = async () => {
     if (!confirmationData) return;
-    const { type, siteId, workerId, siteName } = confirmationData;
+    const { type, siteId, workerId, siteName, managerId } = confirmationData;
 
     try {
       if (type === 'deleteSite') {
@@ -318,29 +395,40 @@ function SitesTasks() {
         showStatusMessage('success', '🗑️ Site deleted successfully.');
       } else if (type === 'releaseManager') {
         await API.patch(`/sites/manager-release/${siteId}`);
-        showStatusMessage('success', '✅ Manager released from site.');
+        if (managerId) {
+          await API.patch(`/labors/manager-site/${managerId}`, {
+            siteName,
+            action: 'deassign',
+          });
+        }
+        const text = '✅ Manager released from site.';
+        showStatusMessage('success', text);
+        setManagerModalMessage({ type: 'success', text });
       } else if (type === 'releaseWorker') {
         await API.patch(`/labors/release-site/${workerId}`, { siteName });
-        showStatusMessage('success', '✅ Worker released from site.');
+        const text = `✅ Worker released from ${siteName}.`;
+        showStatusMessage('success', text);
+        setWorkerModalMessage({ type: 'success', text });
       }
-      fetchSites();
-      fetchManagersAndWorkers();
+      await fetchSites();
+      await fetchManagersAndWorkers();
     } catch (error) {
-      showStatusMessage(
-        'error',
-        `❌ Action failed: ${error.response?.data?.message || 'Check console.'}`
-      );
+      const msg = error.response?.data?.message || error.message;
+      const text = `❌ Action failed: ${msg}`;
+      showStatusMessage('error', text);
+      setWorkerModalMessage(prev => prev.text ? prev : { type: 'error', text });
+      setManagerModalMessage(prev => prev.text ? prev : { type: 'error', text });
     } finally {
       closeConfirmation();
     }
   };
 
-  // --- Per-site allocated inventory fetch (used as refresh for modal, optional) ---
+  // --- inventory ---
   const fetchSiteInventory = async (siteId) => {
     try {
       const { data } = await API.get(`/sites/inventory/${siteId}`);
       setSiteInventory(prev => ({ ...prev, [siteId]: data }));
-    } catch (error) {
+    } catch {
       showStatusMessage('error', 'Failed to fetch site inventory.');
     }
   };
@@ -385,6 +473,7 @@ function SitesTasks() {
   const renderActionButtons = (site) => {
     const canUpdate = isAuthorizedToUpdate(site);
     const canAssignWorkers = isAuthorizedToAssignWorkers(site);
+    const canAssignManager = isAuthorizedToAssignManager(site);
 
     return (
       <div className="site-actions">
@@ -398,14 +487,21 @@ function SitesTasks() {
           </button>
         )}
 
+        {canAssignManager && (
+          <button
+            className="btn-assign-manager"
+            type="button"
+            onClick={() => openManagerModal(site)}
+          >
+            👔 Manage Manager
+          </button>
+        )}
+
         {canUpdate && (
           <button
             className="btn-update-progress"
             type="button"
-            onClick={() => {
-              openUpdateModal(site);
-              fetchSiteInventory(site._id); // refresh allocations for this site
-            }}
+            onClick={() => openUpdateModal(site)}
           >
             ✏️ Update Tasks & Status
           </button>
@@ -427,7 +523,7 @@ function SitesTasks() {
           </button>
         )}
 
-        {!canUpdate && !canAssignWorkers && (
+        {!canUpdate && !canAssignWorkers && !canAssignManager && (
           <span className="view-only-tag">View Only</span>
         )}
       </div>
@@ -442,67 +538,82 @@ function SitesTasks() {
       <div className="allocated-inventory-section">
         <h4>Allocated Inventory</h4>
         {allocations.length > 0 ? (
-          <ul className="allocated-inventory-list">
-            {allocations.map(alloc => {
-              const remaining =
-                alloc.allocatedQuantity - alloc.usedQuantity;
-              const usageValue =
-                usageInputs[site._id]?.[alloc.inventoryItem] || 0;
+          <div className="inventory-card">
+            <div className="inventory-header">
+              <span>Item</span>
+              <span>Allocated</span>
+              <span>Used</span>
+              <span>Remaining</span>
+              {canUse && <span>Action</span>}
+            </div>
+            <div className="inventory-body">
+              {allocations.map(alloc => {
+                const remaining =
+                  alloc.allocatedQuantity - alloc.usedQuantity;
+                const usageValue =
+                  usageInputs[site._id]?.[alloc.inventoryItem] || 0;
 
-              return (
-                <li
-                  key={alloc.inventoryItem}
-                  className="allocated-inventory-item"
-                >
-                  <div className="allocated-info">
-                    <span className="alloc-name">
-                      {alloc.itemName} ({alloc.unit})
-                    </span>
-                    <span className="alloc-qty">
-                      Allocated: {alloc.allocatedQuantity} | Used:{' '}
-                      {alloc.usedQuantity} | Remaining: {remaining}
-                    </span>
-                  </div>
-
-                  {canUse && remaining > 0 && (
-                    <div className="allocated-usage-controls">
-                      <input
-                        type="number"
-                        min="1"
-                        max={remaining}
-                        value={usageValue}
-                        onChange={(e) =>
-                          handleUsageInputChange(
-                            site._id,
-                            alloc.inventoryItem,
-                            e.target.value
-                          )
-                        }
-                        placeholder="Qty used"
-                      />
-                      <button
-                        type="button"
-                        onClick={() =>
-                          handleUseAllocatedInventory(
-                            site._id,
-                            alloc.inventoryItem
-                          )
-                        }
-                      >
-                        Use
-                      </button>
+                return (
+                  <div
+                    key={alloc.inventoryItem}
+                    className="inventory-row"
+                  >
+                    <div className="inv-item">
+                      <span className="inv-name">
+                        {alloc.itemName}
+                      </span>
+                      <span className="inv-unit">
+                        {alloc.unit}
+                      </span>
                     </div>
-                  )}
-
-                  {!canUse && (
-                    <span className="view-only-tag">
-                      View Only (usage by admin/manager)
+                    <span>{alloc.allocatedQuantity}</span>
+                    <span>{alloc.usedQuantity}</span>
+                    <span className={remaining === 0 ? 'inv-zero' : ''}>
+                      {remaining}
                     </span>
-                  )}
-                </li>
-              );
-            })}
-          </ul>
+
+                    {canUse ? (
+                      remaining > 0 ? (
+                        <div className="inv-actions">
+                          <input
+                            type="number"
+                            min="1"
+                            max={remaining}
+                            value={usageValue}
+                            onChange={(e) =>
+                              handleUsageInputChange(
+                                site._id,
+                                alloc.inventoryItem,
+                                e.target.value
+                              )
+                            }
+                            placeholder="Qty"
+                          />
+                          <button
+                            type="button"
+                            onClick={() =>
+                              handleUseAllocatedInventory(
+                                site._id,
+                                alloc.inventoryItem
+                              )
+                            }
+                          >
+                            Use
+                          </button>
+                        </div>
+                      ) : (
+                        <span className="inv-tag-full">Fully used</span>
+                      )
+                    ) : (
+                      <span className="inv-tag-view">
+                        View only
+                      </span>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
         ) : (
           <p className="no-allocated-message">
             No inventory allocated yet for this site.
@@ -704,6 +815,12 @@ function SitesTasks() {
           <div className="worker-assignment-modal">
             <h3>Manage Team: {showWorkerModal.siteName}</h3>
 
+            {workerModalMessage.text && (
+              <div className={`inline-status inline-status-${workerModalMessage.type}`}>
+                {workerModalMessage.text}
+              </div>
+            )}
+
             <h4>Current Team</h4>
             <div className="team-management-list">
               {showWorkerModal.team && showWorkerModal.team.length > 0 ? (
@@ -777,7 +894,81 @@ function SitesTasks() {
               <button
                 type="button"
                 className="btn-cancel"
-                onClick={() => setShowWorkerModal(null)}
+                onClick={() => {
+                  setShowWorkerModal(null);
+                  setWorkerModalMessage({ type: '', text: '' });
+                }}
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Manager assignment modal */}
+      {showManagerModal && (
+        <div className="modal-overlay">
+          <div className="manager-assignment-modal">
+            <h3>Manage Manager: {showManagerModal.siteName}</h3>
+
+            {managerModalMessage.text && (
+              <div className={`inline-status inline-status-${managerModalMessage.type}`}>
+                {managerModalMessage.text}
+              </div>
+            )}
+
+            <div className="current-manager-block">
+              <p>
+                <strong>Current:</strong>{' '}
+                {showManagerModal.managerName || 'Unassigned'}
+              </p>
+            </div>
+
+            <h4>Assign New Manager</h4>
+            <select
+              className="select-manager"
+              value={selectedManagerId}
+              onChange={(e) => setSelectedManagerId(e.target.value)}
+            >
+              <option value="">Select manager</option>
+              {managers.map(m => (
+                <option key={m._id} value={m._id}>
+                  {m.name} ({m.role})
+                </option>
+              ))}
+            </select>
+
+            <div className="modal-actions">
+              <button
+                type="button"
+                className="btn-action"
+                onClick={handleAssignManager}
+              >
+                Save Manager
+              </button>
+
+              {showManagerModal.managerId && (
+                <button
+                  type="button"
+                  className="btn-release-manager"
+                  onClick={() =>
+                    confirmAction({
+                      type: 'releaseManager',
+                      siteId: showManagerModal._id,
+                      siteName: showManagerModal.siteName,
+                      managerId: showManagerModal.managerId,
+                    })
+                  }
+                >
+                  Unassign Manager
+                </button>
+              )}
+
+              <button
+                type="button"
+                className="btn-cancel"
+                onClick={closeManagerModal}
               >
                 Close
               </button>
