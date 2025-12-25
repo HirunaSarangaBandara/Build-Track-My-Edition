@@ -1,54 +1,61 @@
 const express = require('express');
 const router = express.Router();
 const Site = require('../models/Site');
-const Labor = require('../models/Labor'); 
-const multer = require('multer'); 
+const Labor = require('../models/Labor');
+const multer = require('multer');
 const path = require('path');
-const fs = require('fs'); 
+const fs = require('fs');
 
 // --- Middleware Imports ---
 const { authorizeRoles } = require('../middleware/authMiddleware');
 
 // Predefined construction steps
 const DEFAULT_TASKS = [
-    { name: "Create Foundation" }, { name: "Build Ground Floor Walls" }, 
-    { name: "Install Slab/Roofing" }, { name: "Rough-in Electrical/Plumbing" }, 
-    { name: "Interior Finishing (Plastering, Tiling)" }, { name: "Exterior Finishing (Paint, Landscaping)" }, 
+    { name: "Create Foundation" },
+    { name: "Build Ground Floor Walls" },
+    { name: "Install Slab/Roofing" },
+    { name: "Rough-in Electrical/Plumbing" },
+    { name: "Interior Finishing (Plastering, Tiling)" },
+    { name: "Exterior Finishing (Paint, Landscaping)" },
     { name: "Final Inspection and Handover" },
-]; 
+];
 
 // --- Multer Storage Configuration ---
 const storage = multer.diskStorage({
     destination: (req, file, cb) => {
-        // Physical path on the server
         const uploadPath = path.join(__dirname, '..', 'uploads', 'site_images');
         if (!fs.existsSync(uploadPath)) {
             fs.mkdirSync(uploadPath, { recursive: true });
         }
-        cb(null, uploadPath); 
+        cb(null, uploadPath);
     },
     filename: (req, file, cb) => {
-        cb(null, file.fieldname + '-' + Date.now() + path.extname(file.originalname));
-    }
+        cb(
+            null,
+            file.fieldname + '-' + Date.now() + path.extname(file.originalname)
+        );
+    },
 });
 
-const upload = multer({ 
+const upload = multer({
     storage: storage,
     fileFilter: (req, file, cb) => {
         if (
-            file.mimetype === 'image/jpeg' || file.mimetype === 'image/png' || 
-            file.mimetype === 'image/jpg' || file.mimetype === 'image/gif' ||
+            file.mimetype === 'image/jpeg' ||
+            file.mimetype === 'image/png' ||
+            file.mimetype === 'image/jpg' ||
+            file.mimetype === 'image/gif' ||
             file.mimetype === 'image/webp'
         ) {
             cb(null, true);
         } else {
             cb(null, false);
-            req.fileValidationError = 'Invalid file type. Only JPG, PNG, GIF, and WebP format allowed!';
+            req.fileValidationError =
+                'Invalid file type. Only JPG, PNG, GIF, and WebP format allowed!';
         }
     },
-    limits: { fileSize: 5 * 1024 * 1024 } // 5MB limit
+    limits: { fileSize: 5 * 1024 * 1024 }, // 5MB
 });
-
 
 // --- Security Middleware ---
 const authAdmin = authorizeRoles('admin');
@@ -67,38 +74,44 @@ const authAdminOrManager = async (req, res, next) => {
         if (!site) {
             return res.status(404).json({ message: "Site not found." });
         }
-        
+
         if (site.managerId && site.managerId.toString() === userId) {
             next();
         } else {
-            res.status(403).json({ message: "Forbidden: You are not the assigned manager for this site." });
+            res.status(403).json({
+                message:
+                    "Forbidden: You are not the assigned manager for this site.",
+            });
         }
     } catch (err) {
         res.status(500).json({ message: err.message });
     }
 };
 
-
 // --- ROUTES IMPLEMENTATION ---
 
-// GET All Sites (View) 
+// GET All Sites (View)
 router.get('/', async (req, res) => {
     try {
         const sites = await Site.find().sort({ startDate: -1 });
-        const labors = await Labor.find({ sites: { $exists: true, $ne: [] } }).select('name sites role category _id'); 
-        
+        const labors = await Labor.find({
+            sites: { $exists: true, $ne: [] },
+        }).select('name sites role category _id');
+
         const siteTeamMap = {};
-        labors.forEach(labor => {
-            labor.sites.forEach(siteName => { 
+        labors.forEach((labor) => {
+            labor.sites.forEach((siteName) => {
                 if (!siteTeamMap[siteName]) siteTeamMap[siteName] = [];
-                siteTeamMap[siteName].push(labor.toObject()); 
+                siteTeamMap[siteName].push(labor.toObject());
             });
         });
-        
-        const sitesWithTeams = sites.map(site => {
-            const siteObject = site.toObject(); 
+
+        const sitesWithTeams = sites.map((site) => {
+            const siteObject = site.toObject();
             const fullTeam = siteTeamMap[siteObject.siteName] || [];
-            siteObject.team = fullTeam.filter(member => member.role === 'Worker');
+            siteObject.team = fullTeam.filter(
+                (member) => member.role === 'Worker'
+            );
             return siteObject;
         });
 
@@ -110,39 +123,44 @@ router.get('/', async (req, res) => {
 
 // POST Add New Site
 router.post('/', upload.single('siteImage'), authAdmin, async (req, res) => {
-    
     if (req.fileValidationError) {
-        if (req.file) { fs.unlinkSync(req.file.path); } 
+        if (req.file) {
+            fs.unlinkSync(req.file.path);
+        }
         return res.status(400).json({ message: req.fileValidationError });
     }
-    
+
     const { siteName, managerId, managerName, otherDetails } = req.body;
-    
+
     try {
-        // FIX: Store the relative URL path, NOT the physical server path.
-        // Frontend uses: ${BACKEND_HOST}/uploads/site_images/filename.jpg
-        const imagePath = req.file ? `/site_images/${req.file.filename}` : null; 
-        
-        const newSite = new Site({ 
-            siteName, 
-            siteNameKey: siteName, 
-            managerId: managerId || null, 
-            managerName: managerName || null, 
+        const imagePath = req.file ? `/site_images/${req.file.filename}` : null;
+
+        const newSite = new Site({
+            siteName,
+            siteNameKey: siteName,
+            managerId: managerId || null,
+            managerName: managerName || null,
             otherDetails,
-            siteImage: imagePath, // Stored as "/site_images/filename.jpg"
+            siteImage: imagePath,
             tasks: DEFAULT_TASKS,
             currentStatus: "Foundation Phase",
         });
         await newSite.save();
-        
+
         if (managerId) {
-            await Labor.findByIdAndUpdate(managerId, { $addToSet: { sites: siteName } }); 
+            await Labor.findByIdAndUpdate(managerId, {
+                $addToSet: { sites: siteName },
+            });
         }
-        
+
         res.status(201).json(newSite);
     } catch (err) {
-        if (req.file) { 
-            try { fs.unlinkSync(req.file.path); } catch (cleanupError) { console.error('Error deleting file:', cleanupError); }
+        if (req.file) {
+            try {
+                fs.unlinkSync(req.file.path);
+            } catch (cleanupError) {
+                console.error('Error deleting file:', cleanupError);
+            }
         }
         console.error(err);
         res.status(400).json({ message: err.message });
@@ -153,38 +171,38 @@ router.post('/', upload.single('siteImage'), authAdmin, async (req, res) => {
 router.patch('/:id', authAdminOrManager, async (req, res) => {
     const siteId = req.params.id;
     const { taskId, isCompleted, comment, managerId, managerName } = req.body;
-    
+
     const userId = req.user.id;
-    const userName = req.user.name; 
+    const userName = req.user.name;
 
     try {
         const site = await Site.findById(siteId);
         if (!site) return res.status(404).json({ message: "Site not found." });
 
-        if (taskId !== undefined) { 
+        if (taskId !== undefined) {
             const task = site.tasks.id(taskId);
             if (!task) return res.status(404).json({ message: "Task not found." });
 
             task.isCompleted = isCompleted;
             task.completedAt = isCompleted ? new Date() : null;
-            
-            const nextIncompleteTask = site.tasks.find(t => !t.isCompleted);
+
+            const nextIncompleteTask = site.tasks.find((t) => !t.isCompleted);
             if (nextIncompleteTask) {
                 site.currentStatus = `Working on: ${nextIncompleteTask.name}`;
             } else {
                 site.currentStatus = "All major tasks complete.";
             }
         }
-        
+
         if (comment) {
             site.updates.push({ userId, userName, comment });
         }
-        
+
         if (managerId !== undefined && req.user.role === 'admin') {
             site.managerId = managerId;
             site.managerName = managerName;
         }
-        
+
         await site.save();
         res.json(site);
     } catch (err) {
@@ -196,14 +214,16 @@ router.patch('/:id', authAdminOrManager, async (req, res) => {
 router.patch('/status/:id', authAdminOrManager, async (req, res) => {
     const siteId = req.params.id;
     const { status } = req.body;
-    
+
     if (!status || !['Planned', 'Active', 'On Hold', 'Completed'].includes(status)) {
-        return res.status(400).json({ message: "Invalid status value provided." });
+        return res
+            .status(400)
+            .json({ message: "Invalid status value provided." });
     }
-    
+
     try {
         const site = await Site.findByIdAndUpdate(
-            siteId, 
+            siteId,
             { $set: { status: status } },
             { new: true, runValidators: true }
         );
@@ -215,11 +235,10 @@ router.patch('/status/:id', authAdminOrManager, async (req, res) => {
     }
 });
 
-
 // PATCH route for Manager Release
 router.patch('/manager-release/:id', authAdmin, async (req, res) => {
     const siteId = req.params.id;
-    
+
     try {
         const site = await Site.findById(siteId);
         if (!site) return res.status(404).json({ message: "Site not found." });
@@ -232,7 +251,9 @@ router.patch('/manager-release/:id', authAdmin, async (req, res) => {
         await site.save();
 
         if (managerId) {
-            await Labor.findByIdAndUpdate(managerId, { $pull: { sites: siteName } });
+            await Labor.findByIdAndUpdate(managerId, {
+                $pull: { sites: siteName },
+            });
         }
 
         res.json({ message: `Manager released from site ${siteName}.` });
@@ -248,18 +269,21 @@ router.delete('/:id', authAdmin, async (req, res) => {
         if (!site) {
             return res.status(404).json({ message: "Site not found." });
         }
-        
+
         const siteName = site.siteName;
 
         await Labor.updateMany(
-            { sites: siteName }, 
-            { $pull: { sites: siteName } } 
+            { sites: siteName },
+            { $pull: { sites: siteName } }
         );
-        
-        // FIX: Logic to delete the physical image from the disk
+
         if (site.siteImage) {
-            // Converts relative path back to server filesystem path
-            const filePath = path.join(__dirname, '..', 'uploads', site.siteImage);
+            const filePath = path.join(
+                __dirname,
+                '..',
+                'uploads',
+                site.siteImage
+            );
             if (fs.existsSync(filePath)) {
                 fs.unlinkSync(filePath);
             }
@@ -267,7 +291,78 @@ router.delete('/:id', authAdmin, async (req, res) => {
 
         await Site.findByIdAndDelete(req.params.id);
 
-        res.json({ message: "Site deleted successfully, and all users unassigned." });
+        res.json({
+            message: "Site deleted successfully, and all users unassigned.",
+        });
+    } catch (err) {
+        res.status(500).json({ message: err.message });
+    }
+});
+
+// ===================================================================
+// NEW: Inventory allocations and usage per site
+// ===================================================================
+
+// GET /sites/inventory/:id  -> allocated inventory for a site
+router.get('/inventory/:id', authAdminOrManager, async (req, res) => {
+    const siteId = req.params.id;
+
+    try {
+        const site = await Site.findById(siteId);
+        if (!site) {
+            return res.status(404).json({ message: "Site not found." });
+        }
+
+        res.json(site.allocatedInventory || []);
+    } catch (err) {
+        res.status(500).json({ message: err.message });
+    }
+});
+
+// PATCH /sites/inventory-usage/:id -> mark allocated inventory as used
+router.patch('/inventory-usage/:id', authAdminOrManager, async (req, res) => {
+    const siteId = req.params.id;
+    const { inventoryId, quantityUsed } = req.body;
+
+    if (!inventoryId || typeof quantityUsed !== 'number' || quantityUsed <= 0) {
+        return res.status(400).json({
+            message: "inventoryId and a positive quantityUsed are required.",
+        });
+    }
+
+    try {
+        const site = await Site.findById(siteId);
+        if (!site) {
+            return res.status(404).json({ message: "Site not found." });
+        }
+
+        const allocation = site.allocatedInventory.find(
+            (a) => a.inventoryItem.toString() === inventoryId.toString()
+        );
+        if (!allocation) {
+            return res.status(404).json({
+                message:
+                    "No allocation found for this inventory item on this site.",
+            });
+        }
+
+        const availableForUse =
+            allocation.allocatedQuantity - allocation.usedQuantity;
+
+        if (quantityUsed > availableForUse) {
+            return res.status(400).json({
+                message: "Usage exceeds allocated remaining quantity.",
+                remaining: availableForUse,
+            });
+        }
+
+        allocation.usedQuantity += quantityUsed;
+        await site.save();
+
+        res.json({
+            message: "Inventory usage recorded successfully.",
+            allocation,
+        });
     } catch (err) {
         res.status(500).json({ message: err.message });
     }
