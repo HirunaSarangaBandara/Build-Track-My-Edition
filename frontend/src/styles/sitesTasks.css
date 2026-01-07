@@ -1,10 +1,16 @@
+:root {
+  /* Match this to your actual fixed navbar height */
+  --navbar-height: 65px;
+}
+
 /* General Page Layout */
 .sites-page {
   background-color: #f4f7fb;
   min-height: 100vh;
   width: 100%;
   margin: 0;
-  padding: 100px 40px 40px;
+  /* top padding = navbar height + small gap */
+  padding: calc(var(--navbar-height) + 20px) 40px 40px;
   box-sizing: border-box;
   font-family: "Segoe UI", sans-serif;
 }
@@ -545,7 +551,7 @@
 .modal-overlay,
 .confirmation-overlay {
   position: fixed;
-  top: 65px; /* navbar height */
+  top: var(--navbar-height); /* align with navbar */
   left: 0;
   right: 0;
   bottom: 0;
@@ -866,7 +872,7 @@
 /* --- Media Queries --- */
 @media (max-width: 768px) {
   .sites-page {
-    padding: 90px 20px;
+    padding: calc(var(--navbar-height) + 10px) 20px 20px;
   }
 
   .site-add-form {
