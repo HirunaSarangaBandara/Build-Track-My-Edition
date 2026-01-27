@@ -40,8 +40,7 @@ function Login() {
       navigate("/dashboard");
     } catch (err) {
       const msg =
-        err.response?.data?.message ||
-        "Invalid credentials. Please try again.";
+        err.response?.data?.message || "Invalid credentials. Please try again.";
       setError(msg);
     } finally {
       setLoading(false);
@@ -50,8 +49,7 @@ function Login() {
 
   return (
     <div className="login-page">
-
-      {/* 🔹 Lottie Animated Background */}
+      {/* Lottie Animated Background */}
       <Lottie
         loop
         play
